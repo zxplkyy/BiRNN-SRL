@@ -35,7 +35,7 @@ def load_dictionary(path):
     return word2idx,idx2word
 def load_dictionaries(config):
     # load wordidx
-    fp = open("../dat/wordidx", "r",encoding="utf-8")
+    fp = open("../dataset/wordidx", "r",encoding="utf-8")
     word2idx, idx2word = dict(), dict()
     words = [line.strip() for line in fp.readlines()]
     if config['vocab_size'] is not None:
@@ -46,7 +46,7 @@ def load_dictionaries(config):
     fp.close()
 
     # load labelidx
-    fp = open("../dat/postagidx", "r",encoding="utf-8")
+    fp = open("../dataset/postagidx", "r",encoding="utf-8")
     postag2idx, idx2postag = dict(), dict()
     for idx, postag in enumerate([line.strip() for line in fp.readlines()]):
         postag2idx[postag] = idx
@@ -54,7 +54,7 @@ def load_dictionaries(config):
     fp.close()
 
     # load labelidx
-    fp = open("../dat/labelidx", "r",encoding="utf-8")
+    fp = open("../dataset/labelidx", "r",encoding="utf-8")
     label2idx, idx2label = dict(), dict()
     for idx, label in enumerate([line.strip() for line in fp.readlines()]):
         label2idx[label] = idx

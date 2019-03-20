@@ -104,9 +104,9 @@ def cal_true_accuracy(gold_sequence,pred_sequence):
     O_id = label2idx["O"]
     assert(len(gold_sequence)==len(pred_sequence))
     for i in range(len(pred_sequence)):
-        if gold_sequence[i] != predicate_id and gold_sequence[i] != O_id:
-            if pred_sequence[i] != predicate_id and pred_sequence[i] != O_id:
-                predict_label += 1
+#         if gold_sequence[i] != predicate_id and gold_sequence[i] != O_id:
+          if pred_sequence[i] != predicate_id and pred_sequence[i] != O_id:
+              predict_label += 1
     for i in range(len(gold_sequence)):
         if gold_sequence[i] != predicate_id and gold_sequence[i] != O_id:
             total_labels += 1

@@ -88,33 +88,168 @@ class Chinese_SRL:
         tf.summary.scalar('loss', loss)
         return loss
 
-def cal_true_accuracy(gold_sequence,pred_sequence):
-    """
+def modify(sequence):
+    label2id, id2label = load_dictionary(configure["label2id_file"])
+    lastname = ""
+    for i in range(len(sequence)):
+        tagid = sequence[i]
+        tag = id2label[tagid]
+        if tag[0] == 'B':
+            lastname = tag[2:]
+            continue
+        if tag[0] == 'I' or tag[0] == "E":
+            if tag[2:] != lastname:
+                lastname = tag[2:]
+                sequence[i] = label2id["B-"+lastname]
+    return sequence
 
-    :param gold_sequence:
-    :param pred_sequence:预测结果
+def recover(sentence_origin,scores,labels,length,matrix):
+    new_inputs = []
+    new_preds = []
+    new_golds = []
+    for line, score, gold, length in zip(sentence_origin, scores, labels, length):
+        length = min(length,configure["max_sentence_len"])
+        line = line[:length]  # 实际长度
+        if configure["use_crf"]:
+            pred,_ = tf.contrib.crf.viterbi_decode(score,matrix)
+        else:
+            pred = np.argmax(score,axis=1)
+        pred = modify(pred)
+        pred = pred[:length]
+        gold = gold[:length]
+        # print line, pred, gold
+        new_inputs.append(line)
+        new_preds.append(pred)
+        new_golds.append(gold)
+    return new_inputs, new_preds, new_golds
+def compare(role1,role2):
+    """
+    :param role1: RR_model识别出的角色 O,B-role,I-role,re-role
+    :param role2: 实际预测出的结果
     :return:
     """
-    correct_labels = 0
-    total_labels = 0
-    predict_label = 0
+    flag1 = role1[0]
+    flag2 = role2[0]
+    new_role = role2 #用于做改进
+    if flag1 == flag2:
+        return new_role
+    if flag1 != flag2 and flag1 == "O":
+        new_role = role1
+    if flag1 != flag2 and flag1 == "B" and flag2 == "I":
+        new_role = flag1+role2[1:]
+    if flag1 != flag2 and flag1 == "I" and flag2 == "B":
+        new_role = flag1+role2[1:]
+    return new_role
 
-    label2idx, idx2label= load_dictionary(configure["label2id_file"])
-    predicate_id = label2idx["rel"]
-    O_id = label2idx["O"]
-    assert(len(gold_sequence)==len(pred_sequence))
-    for i in range(len(pred_sequence)):
-#         if gold_sequence[i] != predicate_id and gold_sequence[i] != O_id:
-          if pred_sequence[i] != predicate_id and pred_sequence[i] != O_id:
-              predict_label += 1
-    for i in range(len(gold_sequence)):
-        if gold_sequence[i] != predicate_id and gold_sequence[i] != O_id:
-            total_labels += 1
-            if gold_sequence[i] == pred_sequence[i]:
-                correct_labels += 1
-        else:
-            continue
-    return correct_labels, total_labels, predict_label
+def transform(inputs,id2word):
+    """
+    对输入的序列进行转化
+    :param inputs:
+    :param id2word:
+    :return:
+    """
+    new_inputs = []
+    for word in inputs:
+        new_inputs.append(id2word[word])
+    return new_inputs
+
+
+def convert(inputs, labels, is_training):
+    '''
+    用于转换为原来的句子
+    :param inputs: word_id
+    :param labels: label_id
+    :param is_training:
+    :return: convert id to original word
+    '''
+    word_vocab_train = configure["word2id_train"]
+    word_vocab_valid = configure["word2id_valid"]
+    label_vocab = configure["label2id_file"]
+    if is_training:
+        word2id,id2word = load_dictionary(word_vocab_train)
+    else:
+        word2id, id2word = load_dictionary(word_vocab_valid)
+    label2id,id2label = load_dictionary(label_vocab)
+    # pred_id = label2id.get("rel")
+    # pred_pos = 0
+    new_inputs = []
+    for line, label in zip(inputs, labels):
+        new_input = []
+        # print(label,"label.................")
+        # label_list = label.tolist()
+        # pred_pos = label_list.index(pred_id) if pred_id in label_list else 0  # 通过label序列得到谓语所在的位置
+        for word_id, label_id in zip(line, label):
+            new_input.append(id2word[word_id] + '/' + id2label[label_id])
+        new_inputs.append(new_input)
+    return new_inputs
+
+def eval(inputs, pred_labels, gold_labels,is_training):
+    '''
+    :param inputs: sentence
+    :param pred_labels: labels predicted by model
+    :param gold_labels: True labels
+    :param is_training: convert id to words based on train_vocab or valid_vocab
+    :return: recall, precision, F1
+    '''
+    case_true, case_recall, case_precision = 0.0, 0.0, 0.0
+    golds = convert(inputs, gold_labels, is_training) #[[word1/label1, word2/label2,...],[],]
+    preds = convert(inputs, pred_labels,is_training)
+    assert len(golds) == len(preds), "length of prediction file and gold file should be the same."
+    for gold, pred in zip(golds, preds):
+        lastname = ''
+        keys_gold, keys_pred = {}, {}
+        for item in gold:
+            word, label = item.split('/')[0], item.split('/')[-1]
+            flag, name = label[:label.find('-')], label[label.find('-') + 1:]
+            if flag == 'O':
+                continue
+            if flag == 'S':
+                if name not in keys_gold:
+                    keys_gold[name] = [word]
+                else:
+                    keys_gold[name].append(word)
+            else:
+                if flag == 'B':
+                    if name not in keys_gold:
+                        keys_gold[name] = [word]
+                    else:
+                        keys_gold[name].append(word)
+                    lastname = name
+                elif flag == 'I' or flag == 'E':
+                    assert name == lastname, "the I-/E- labels are inconsistent with B- labels in gold file."
+                    keys_gold[name][-1] += ' ' + word
+
+        for item in pred:
+            word, label = item.split('/')[0], item.split('/')[-1]
+            flag, name = label[:label.find('-')], label[label.find('-') + 1:]
+            if name == 'O':
+                continue
+            if flag == 'S':
+                if name not in keys_pred:
+                    keys_pred[name] = [word]
+                else:
+                    keys_pred[name].append(word)
+            else:
+                if flag == 'B':
+                    if name not in keys_pred:
+                        keys_pred[name] = [word]
+                    else:
+                        keys_pred[name].append(word)
+                    lastname = name
+                elif flag == 'I' or flag == 'E':
+                    assert name == lastname, "the I-/E- labels are inconsistent with B- labels in pred file."
+                    keys_pred[name][-1] += ' ' + word
+        for key in keys_gold:
+            case_recall += len(keys_gold[key])
+        for key in keys_pred:
+            case_precision += len(keys_pred[key])
+        for key in keys_pred:
+            if key in keys_gold:
+                for word in keys_pred[key]:
+                    if word in keys_gold[key]:
+                        case_true += 1
+                        keys_gold[key].remove(word)  # avoid replicate words
+    return case_true, case_precision, case_recall
 def test_evaluate(sess, unary_score,test_sequence_length,transMatrix,
                   input_curword,input_lastword,input_nextword,input_predicate,input_curpostag,input_lastpostag,input_nextpostag,input_dist,input_length,
                   curword,lastword,nextword,predicate,curpostag,lastpostag,nextpostag,dist,length,tY
@@ -157,6 +292,7 @@ def test_evaluate(sess, unary_score,test_sequence_length,transMatrix,
         if endOff > totalLen:
             endOff = totalLen
         y = tY[i * batchSize:endOff]
+        twX_origin = curword[i * batchSize:endOff]
         feed_dict = {input_curword: curword[i * batchSize:endOff],
                      input_lastword: lastword[i * batchSize:endOff],
                      input_nextword: nextword[i * batchSize:endOff],
@@ -169,29 +305,24 @@ def test_evaluate(sess, unary_score,test_sequence_length,transMatrix,
                      }
         unary_score_val, test_sequence_length_val = sess.run(
             [unary_score, test_sequence_length], feed_dict)
-        for tf_unary_scores_, y_, sequence_length_ in zip(
-                unary_score_val, y, test_sequence_length_val):
-            # print("seg len:%d" % (sequence_length_))
-            tf_unary_scores_ = tf_unary_scores_[:sequence_length_]
-            y_ = y_[:sequence_length_] #实际值
-            viterbi_sequence, _ = tf.contrib.crf.viterbi_decode(
-                tf_unary_scores_, transMatrix)
-            y_ = y_.tolist()
-            correct_label, total_label, predict_label = cal_true_accuracy(y_, viterbi_sequence)
-            correct_labels += correct_label
-            total_labels += total_label
-            predict_labels += predict_label
-        precision = 0
-        recall = 0
-        f1 = 0
-        if predict_labels != 0:
-            precision = 100.0 * correct_labels / float(predict_labels)
-        if total_labels != 0:
-            recall = 100.0 * correct_labels / float(total_labels)
-        if correct_labels != 0:
-            f1 = 2.0 * recall * precision / (recall + precision)
-        print("Accuracy: %.3f%%" % precision, "recall: %.3f%%" % recall, "f1: %.3f%%" % f1)
-        return f1
+        inputs, preds, golds = recover(twX_origin, unary_score_val, y, test_sequence_length_val, transMatrix)
+        case_true, case_precision, case_recall = eval(inputs,preds,golds,False)
+        total_true += case_true
+        total_precision += case_precision
+        total_recall += case_recall
+        if case_precision and case_recall:
+            precision = 100.0*case_true /float(case_precision)
+            recall = 100.0* case_true/float(case_recall)
+            if precision and recall:
+                f1 = 2.0 * recall * precision / (recall + precision)
+                print("Accuracy: %.3f%%" % precision, "recall: %.3f%%" % recall, "f1: %.3f%%" % f1)
+    if total_precision and total_recall:
+        precision = 100.0 * total_true / float(total_precision)
+        recall = 100.0 * total_true / float(total_recall)
+        if precision and recall:
+            average_f1 = 2.0 * recall * precision / (recall + precision)
+            print(" Average Accuracy: %.3f%%" % precision, "Average recall: %.3f%%" % recall, " Average f1: %.3f%%" % average_f1)
+    return average_f1
 
 def main(unused_argv):
     global_step = tf.Variable(0, name='global_step', trainable=False)
